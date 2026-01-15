@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const blinkit = require("./scrapers/blinkit");
 const zepto = require("./scrapers/zepto");
+const jiomart = require("./scrapers/jiomart");
 const swiggy = require("./scrapers/swiggy");
 const { matchProducts } = require("./utils/productMatcher");
 
@@ -30,6 +31,7 @@ function clearOldResults() {
   const files = [
     "blinkit-result.json",
     "zepto-result.json",
+    "jiomart-result.json",
     "swiggy-result.json",
     "final-matches.json",
     "all-platforms.json",
@@ -55,13 +57,14 @@ function clearOldResults() {
 }
 
 // 📊 Create unified results + print platform summary
-function summarizeAndMerge({ blinkit, zepto, swiggy }) {
+function summarizeAndMerge({ blinkit, zepto, jiomart, swiggy }) {
   const resultDir = path.join(__dirname, "results");
   const unifiedPath = path.join(resultDir, "all-platforms.json");
 
   const datasets = [
     { name: "Blinkit", data: blinkit },
     { name: "Zepto", data: zepto },
+    { name: "Jiomart", data: jiomart },
     { name: "Swiggy", data: swiggy },
   ];
 
@@ -88,7 +91,7 @@ function summarizeAndMerge({ blinkit, zepto, swiggy }) {
   }
 
   // 💾 Save unified dataset
-  const all = [...(blinkit || []), ...(zepto || []), ...(swiggy || [])];
+  const all = [...(blinkit || []), ...(zepto || []), ...(jiomart || []), ...(swiggy || [])];
   fs.writeFileSync(unifiedPath, JSON.stringify(all, null, 2), "utf-8");
 
   // 📊 Print Summary
@@ -125,20 +128,22 @@ async function main() {
     );
 
     // Step 2: Run all scrapers concurrently
-    const [blinkitData, zeptoData, swiggyData] = await Promise.allSettled([
+    const [blinkitData, zeptoData, jiomart, swiggyData] = await Promise.allSettled([
       blinkit(pincode, product),
       zepto(pincode, product),
+      jiomart(pincode, product),
       swiggy(pincode, product),
     ]);
 
     const blinkitResult =
       blinkitData.status === "fulfilled" ? blinkitData.value : [];
     const zeptoResult = zeptoData.status === "fulfilled" ? zeptoData.value : [];
+    const jiomartResult = jiomartData.status === "fulfilled" ? jiomartData.value : [];
     const swiggyResult =
       swiggyData.status === "fulfilled" ? swiggyData.value : [];
 
     // Step 3: Handle missing data
-    if (!blinkitResult.length && !zeptoResult.length && !swiggyResult.length) {
+    if (!blinkitResult.length && !zeptoResult.length && !jiomartResult.length && !swiggyResult.length) {
       console.log(
         `🚫 No data found for "${product}" at PINCODE ${pincode} on any platform.`
       );
@@ -147,6 +152,7 @@ async function main() {
 
     if (!blinkitResult.length) console.log("⚠️ Blinkit returned no products.");
     if (!zeptoResult.length) console.log("⚠️ Zepto returned no products.");
+    if (!jiomartResult.length) console.log("⚠️ Zepto returned no products.");
     if (!swiggyResult.length) console.log("⚠️ Swiggy returned no products.");
 
     console.log(`\n✅ Blinkit Results: ${blinkitResult.length}`);
@@ -154,7 +160,7 @@ async function main() {
     console.log(`✅ Swiggy Results: ${swiggyResult.length}`);
 
     // Step 4: Match products if 2 or more have results
-    const activePlatforms = [blinkitResult, zeptoResult, swiggyResult].filter(
+    const activePlatforms = [blinkitResult, zeptoResult, jiomartResult, swiggyResult].filter(
       (d) => d.length > 0
     );
 
@@ -169,6 +175,7 @@ async function main() {
       summarizeAndMerge({
         blinkit: blinkitResult,
         zepto: zeptoResult,
+        jiomart: jiomartResult,
         swiggy: swiggyResult,
       });
     } else {

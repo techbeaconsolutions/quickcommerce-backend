@@ -5,6 +5,7 @@ const path = require("path");
 
 const blinkit = require("./scrapers/blinkit");
 const zepto = require("./scrapers/zepto");
+const jiomart = require("./scrapers/jiomart");
 const swiggy = require("./scrapers/swiggy");
 const { safeRun } = require("./scrapers/safeRunner");
 const { ensureXvfb } = require("./utils/xvfb");
@@ -30,9 +31,10 @@ console.log("👷 Worker starting...");
 
       await job.updateProgress(10);
 
-      const [blinkData, zeptoData, swiggyData] = await Promise.all([
+      const [blinkData, zeptoData, jiomartData, swiggyData] = await Promise.all([
         safeRun(() => blinkit(pincode, product)),
         safeRun(() => zepto(pincode, product)),
+        safeRun(() => jiomart(pincode, product)),
         safeRun(() => swiggy(pincode, product)),
       ]);
 
@@ -41,6 +43,7 @@ console.log("👷 Worker starting...");
       const all = [
         ...(blinkData || []),
         ...(zeptoData || []),
+        ...(jiomartData || []),
         ...(swiggyData || []),
       ];
 
@@ -51,6 +54,7 @@ console.log("👷 Worker starting...");
       const merged = [
         ...(blinkData || []),
         ...(zeptoData || []),
+        ...(jiomartData || []),
         ...(swiggyData || []),
       ].filter(item => item.price && toNum(item.price) !== Infinity);
 
@@ -73,6 +77,7 @@ console.log("👷 Worker starting...");
         platforms: {
           blinkit: blinkData,
           zepto: zeptoData,
+          jiomart: jiomartData,
           swiggy: swiggyData,
         },
       };
