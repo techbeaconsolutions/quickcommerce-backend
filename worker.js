@@ -48,7 +48,7 @@ console.log("👷 Worker starting...");
       ];
 
       const toNum = (price) =>
-        parseFloat(String(price || "").replace(/₹|\s/g, "")) || Infinity;
+        parseFloat(String(price || "").replace(/[₹,\s]/g, "")) || Infinity;
 
       // 🔹 Merge + clean
       const merged = [
@@ -85,10 +85,6 @@ console.log("👷 Worker starting...");
       // ✅ Latest-result-only file (intentional overwrite)
       const savePath = path.join(__dirname, "results", "final-result.json");
       fs.writeFileSync(savePath, JSON.stringify(finalOutput, null, 2));
-
-
-      fs.writeFileSync(savePath, JSON.stringify(finalOutput, null, 2));
-
       await job.updateProgress(100);
       console.log("✅ Job completed:", job.id);
 

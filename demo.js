@@ -128,7 +128,7 @@ async function main() {
     );
 
     // Step 2: Run all scrapers concurrently
-    const [blinkitData, zeptoData, jiomart, swiggyData] = await Promise.allSettled([
+    const [blinkitData, zeptoData, jiomartData, swiggyData] = await Promise.allSettled([
       blinkit(pincode, product),
       zepto(pincode, product),
       jiomart(pincode, product),
@@ -152,11 +152,12 @@ async function main() {
 
     if (!blinkitResult.length) console.log("⚠️ Blinkit returned no products.");
     if (!zeptoResult.length) console.log("⚠️ Zepto returned no products.");
-    if (!jiomartResult.length) console.log("⚠️ Zepto returned no products.");
+    if (!jiomartResult.length) console.log("⚠️ Jiomart returned no products.");
     if (!swiggyResult.length) console.log("⚠️ Swiggy returned no products.");
 
     console.log(`\n✅ Blinkit Results: ${blinkitResult.length}`);
     console.log(`✅ Zepto Results: ${zeptoResult.length}`);
+    console.log(`✅ Jiomart Results: ${jiomartResult.length}`);
     console.log(`✅ Swiggy Results: ${swiggyResult.length}`);
 
     // Step 4: Match products if 2 or more have results
