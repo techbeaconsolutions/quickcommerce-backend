@@ -2,8 +2,8 @@ const { chromium } = require("playwright");
 const fs = require("fs");
 const path = require("path");
 const cp = require("child_process");
-const { ensureXvfb } = require("../utils/xvfb");
-const { safeHeadless } = require("../utils/headless");
+const { ensureXvfb } = require("../worker-utils/xvfb");
+const { safeHeadless } = require("../worker-utils/headless");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

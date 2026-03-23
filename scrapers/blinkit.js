@@ -1,7 +1,7 @@
 const { chromium } = require("playwright");
 const fs = require("fs");
 const path = require("path");
-const { safeHeadless } = require("../utils/headless");
+const { safeHeadless } = require("../worker-utils/headless");
 
 const DEFAULT_LIMIT = 5;
 const DEFAULT_TIMEOUT = 60000;
@@ -150,7 +150,7 @@ async function extractFromCard(card) {
 
 /* ---------- MAIN SCRAPER ---------- */
 async function scrapeBlinkit(pincode, searchTerm, options = {}) {
-  const { headless = false, limit = DEFAULT_LIMIT } = options;
+  const { headless = true, limit = DEFAULT_LIMIT } = options;
 
   log(`🟩 Blinkit → ${pincode} | ${searchTerm}`);
 
@@ -220,7 +220,7 @@ async function scrapeBlinkit(pincode, searchTerm, options = {}) {
     }
 
     fs.writeFileSync(outputPath, JSON.stringify(results, null, 2));
-    log(`💾 Saved ${results.length} items`);
+    log(`💾 Saved ${results.length} Blinkit items`);
 
     await browser.close();
     return results;

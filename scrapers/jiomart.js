@@ -5,11 +5,27 @@ const path = require("path");
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
+/* =====================================================
+   Utils
+===================================================== */
+
+// Normalize price like "₹45\n₹60" → "₹45"
+function normalizePrice(price) {
+  if (!price) return null;
+  const match = price.match(/₹\s*(\d+)/);
+  return match ? `₹${match[1]}` : null;
+}
+
+/* =====================================================
+   Main Scraper
+===================================================== */
+
 async function scrapeJioMart(pincode, product) {
   console.log(`🟦 [JioMart] ${pincode} | ${product}`);
 
   const outputDir = path.join(__dirname, "..", "results");
   if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+
   const outputPath = path.join(outputDir, "jiomart-result.json");
 
   const browser = await chromium.launch({
@@ -36,7 +52,7 @@ async function scrapeJioMart(pincode, product) {
     await page.waitForTimeout(2000);
 
     /* =====================================================
-       2️⃣ Click "Select Location Manually" if popup appears
+       2️⃣ Location popup (manual)
     ===================================================== */
     try {
       const manualBtn = page.locator("button", {
@@ -50,7 +66,7 @@ async function scrapeJioMart(pincode, product) {
     } catch { }
 
     /* =====================================================
-       3️⃣ Open guestmap
+       3️⃣ Guestmap
     ===================================================== */
     console.log("📍 Opening guestmap...");
     await page.goto("https://www.jiomart.com/customer/guestmap", {
@@ -59,7 +75,7 @@ async function scrapeJioMart(pincode, product) {
     await page.waitForTimeout(2000);
 
     /* =====================================================
-       4️⃣ Type PINCODE in search input
+       4️⃣ Enter PINCODE
     ===================================================== */
     console.log("⌨️ Typing pincode...");
     const searchInput = page.locator(
@@ -72,28 +88,16 @@ async function scrapeJioMart(pincode, product) {
     await searchInput.type(pincode, { delay: 120 });
 
     /* =====================================================
-       5️⃣ Wait for suggestions & click first
+       5️⃣ Select first suggestion
     ===================================================== */
-    console.log("📍 Selecting first location suggestion...");
-    console.log("📍 Selecting first suggestion using keyboard...");
-
-    // wait a bit for Google suggestions to appear
     await page.waitForTimeout(1500);
-
-    // ArrowDown selects first suggestion
     await page.keyboard.press("ArrowDown");
     await page.waitForTimeout(300);
-
-    // Enter confirms it
     await page.keyboard.press("Enter");
-
-    // wait for map + address resolution
-    await page.waitForTimeout(3000);
-
     await page.waitForTimeout(3000);
 
     /* =====================================================
-       6️⃣ Wait for confirm / deliver button
+       6️⃣ Confirm location
     ===================================================== */
     console.log("🗺 Waiting for confirm button...");
     await page.waitForFunction(() => {
@@ -107,11 +111,8 @@ async function scrapeJioMart(pincode, product) {
       });
     }, { timeout: 30000 });
 
-    /* =====================================================
-       7️⃣ Click confirm
-    ===================================================== */
     console.log("✅ Confirming location...");
-    const confirmed = await page.evaluate(() => {
+    await page.evaluate(() => {
       for (const b of document.querySelectorAll("button")) {
         const t = (b.innerText || "").toLowerCase();
         if (
@@ -120,28 +121,20 @@ async function scrapeJioMart(pincode, product) {
           t.includes("use this location")
         ) {
           b.click();
-          return true;
+          return;
         }
       }
-      return false;
     });
-
-    if (!confirmed) {
-      throw new Error("Confirm location button not found");
-    }
 
     /* =====================================================
-       8️⃣ Wait for redirect to Quick page
+       7️⃣ Wait for redirect
     ===================================================== */
-    await page.waitForURL(/jiomart\.com\/\?tab=groceries|jiomart\.com\/\?/i, {
-      timeout: 30000,
-    });
-
+    await page.waitForURL(/jiomart\.com/i, { timeout: 30000 });
     console.log("🚀 Location locked successfully");
     await page.waitForTimeout(2000);
 
     /* =====================================================
-       9️⃣ Open FINAL search page directly
+       8️⃣ Search page
     ===================================================== */
     const searchUrl = `https://www.jiomart.com/search?q=${encodeURIComponent(
       product
@@ -149,14 +142,12 @@ async function scrapeJioMart(pincode, product) {
     console.log(`🔎 Opening ${searchUrl}`);
     await page.goto(searchUrl, { waitUntil: "domcontentloaded" });
 
-    await page.waitForSelector(
-      "div[class*=product], li[class*=product]",
-      { timeout: 20000 }
-    );
-    await page.waitForTimeout(2000);
+    await page.waitForSelector("li.ais-InfiniteHits-item", {
+      timeout: 20000,
+    });
 
     /* =====================================================
-       🔟 Scroll
+       9️⃣ Scroll
     ===================================================== */
     for (let i = 0; i < 8; i++) {
       await page.mouse.wheel(0, 1500);
@@ -164,63 +155,70 @@ async function scrapeJioMart(pincode, product) {
     }
 
     /* =====================================================
-       1️⃣1️⃣ Scrape
+       🔟 Scrape
     ===================================================== */
     console.log("🧮 Scraping products...");
-    const products = await page.evaluate(() => {
+
+    const rawProducts = await page.evaluate(() => {
       return Array.from(
         document.querySelectorAll("li.ais-InfiniteHits-item")
-      )
-        .slice(0, 5) // ✅ LIMIT TO FIRST 5 PRODUCTS
-        .map((el) => {
-          const name =
-            el.querySelector(".plp-card-details-name")?.innerText?.trim() ||
-            null;
+      ).map((el) => {
+        const name =
+          el.querySelector(".plp-card-details-name")?.innerText?.trim() ||
+          null;
 
-          const price =
-            el.querySelector(".jm-heading-xxs")?.innerText?.trim() ||
-            null;
+        const price =
+          el.querySelector(".jm-heading-xxs")?.innerText?.trim() ||
+          null;
 
-          const mrp =
-            el.querySelector(".line-through")?.innerText?.trim() ||
-            null;
+        const imageEl =
+          el.querySelector("img[data-src]") || el.querySelector("img");
 
-          const imageEl =
-            el.querySelector("img[data-src]") || el.querySelector("img");
+        const image =
+          imageEl?.getAttribute("data-src") ||
+          imageEl?.getAttribute("src") ||
+          null;
 
-          const image =
-            imageEl?.getAttribute("data-src") ||
-            imageEl?.getAttribute("src") ||
-            null;
+        const url =
+          el.querySelector("a.plp-card-wrapper")?.href || null;
 
-          const url =
-            el.querySelector("a.plp-card-wrapper")?.href || null;
-
-          return {
-            title: name,
-            price,
-            mrp,
-            image,
-            url,
-            platform: "JioMart",
-          };
-        });
+        return { name, price, image, url };
+      });
     });
 
+    /* =====================================================
+       1️⃣1️⃣ Normalize & Finalize
+    ===================================================== */
+    const finalData = rawProducts
+      .map((p, index) => ({
+        platform: "JioMart",
+        pincode,
+        name: p.name,
+        price: normalizePrice(p.price),
+        quantity: null,
+        image: p.image,
+        url: p.url,
+        rank: index + 1,
+      }))
+      .filter((p) => p.name && p.price)
+      .slice(0, 5);
 
-    const finalData = products.filter((p) => p.title).slice(0, 20);
     fs.writeFileSync(outputPath, JSON.stringify(finalData, null, 2));
     console.log(`✅ Saved ${finalData.length} products`);
+
+    return finalData; // 🔥 REQUIRED FOR WORKER
   } catch (err) {
     console.error("❌ JioMart error:", err.message);
+    return [];
   } finally {
     await browser.close();
   }
 }
 
 /* =====================================================
-   CLI
+   CLI Support
 ===================================================== */
+
 if (require.main === module) {
   const [pincode, product] = process.argv.slice(2);
   if (!pincode || !product) {
