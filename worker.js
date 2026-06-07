@@ -1,5 +1,3 @@
-// worker.js
-
 const { Worker } = require("bullmq");
 const fs = require("fs");
 const path = require("path");
@@ -18,12 +16,12 @@ if (!fs.existsSync(RESULTS_DIR)) {
 }
 
 /* --------------------------------------------------
-   ⏱ RESULT FILE TTL (AUTO DELETE)
+   ⏱ RESULT FILE TTL
 -------------------------------------------------- */
-const RESULT_TTL_MS = 60 * 60 * 1000; // 1 hour
+const RESULT_TTL_MS = 60 * 60 * 1000;
 
 /* --------------------------------------------------
-   🔴 REDIS (BULLMQ SAFE CONFIG)
+   🔴 REDIS
 -------------------------------------------------- */
 const redisConnection = {
   host: "127.0.0.1",
@@ -32,7 +30,7 @@ const redisConnection = {
 };
 
 /* --------------------------------------------------
-   🔤 NORMALIZATION + MATCHING
+   🔤 NORMALIZATION
 -------------------------------------------------- */
 function normalizeName(str = "") {
   return str
@@ -44,14 +42,21 @@ function normalizeName(str = "") {
 }
 
 function similarityScore(query, name) {
-  const qTokens = normalizeName(query).split(" ").filter(Boolean);
-  const nTokens = normalizeName(name).split(" ").filter(Boolean);
+  const q = normalizeName(query);
+  const n = normalizeName(name);
 
-  if (!qTokens.length || !nTokens.length) return 0;
+  const fruitKeywords = ["banana", "apple", "watermelon", "orange", "guava", "chikoo"];
+
+  if (q === "fruits") {
+    if (fruitKeywords.some(k => n.includes(k))) return 1;
+  }
+
+  const qTokens = q.split(" ").filter(Boolean);
+  const nTokens = n.split(" ").filter(Boolean);
 
   let matched = 0;
-  for (const q of qTokens) {
-    if (nTokens.includes(q)) matched++;
+  for (const token of qTokens) {
+    if (nTokens.includes(token)) matched++;
   }
 
   return matched / qTokens.length;
@@ -60,13 +65,8 @@ function similarityScore(query, name) {
 /* --------------------------------------------------
    📦 HELPERS
 -------------------------------------------------- */
-function getDisplayName(item) {
-  return item.title || item.name || "";
-}
-
-function getQuantity(item) {
-  return item.qty || item.quantity || null;
-}
+const getDisplayName = (item) => item.title || item.name || "";
+const getQuantity = (item) => item.qty || item.quantity || null;
 
 function getPriceNumber(price) {
   if (!price) return Infinity;
@@ -75,7 +75,7 @@ function getPriceNumber(price) {
 }
 
 /* --------------------------------------------------
-   🧹 AUTO CLEANUP OLD RESULT FILES
+   🧹 CLEANUP
 -------------------------------------------------- */
 function cleanupOldResults() {
   const now = Date.now();
@@ -93,10 +93,7 @@ function cleanupOldResults() {
   });
 }
 
-// run cleanup on worker boot
 cleanupOldResults();
-
-// repeat cleanup every 30 minutes
 setInterval(cleanupOldResults, 30 * 60 * 1000);
 
 /* --------------------------------------------------
@@ -108,11 +105,11 @@ const worker = new Worker(
     const { pincode, product } = job.data;
     const timestamp = new Date().toISOString();
 
-    console.log(`🔍 Job ${job.id} → Searching "${product}" @ ${pincode}`);
+    console.log(`🔍 Job ${job.id} → "${product}" @ ${pincode}`);
 
-    /* ---------------- INIT PROGRESS ---------------- */
+    /* ---------- START PROGRESS ---------- */
     await job.updateProgress({
-      percent: 0,
+      percent: 10,
       platforms: {
         blinkit: "pending",
         zepto: "pending",
@@ -120,36 +117,18 @@ const worker = new Worker(
       },
     });
 
-    /* ---------------- SCRAPE BLINKIT ---------------- */
-    const blinkData =
-      (await safeRun(() => blinkit(pincode, product))) || [];
+    /* ---------- PARALLEL SCRAPING ---------- */
+    const results = await Promise.allSettled([
+      safeRun(() => blinkit(pincode, product)),
+      safeRun(() => zepto(pincode, product)),
+      safeRun(() => jiomart(pincode, product)),
+    ]);
 
-    await job.updateProgress({
-      percent: 33,
-      platforms: {
-        blinkit: "done",
-        zepto: "pending",
-        jiomart: "pending",
-      },
-    });
+    const blinkData = results[0].status === "fulfilled" ? results[0].value || [] : [];
+    const zeptoData = results[1].status === "fulfilled" ? results[1].value || [] : [];
+    const jiomartData = results[2].status === "fulfilled" ? results[2].value || [] : [];
 
-    /* ---------------- SCRAPE ZEPTO ---------------- */
-    const zeptoData =
-      (await safeRun(() => zepto(pincode, product))) || [];
-
-    await job.updateProgress({
-      percent: 66,
-      platforms: {
-        blinkit: "done",
-        zepto: "done",
-        jiomart: "pending",
-      },
-    });
-
-    /* ---------------- SCRAPE JIOMART ---------------- */
-    const jiomartData =
-      (await safeRun(() => jiomart(pincode, product))) || [];
-
+    /* ---------- FINAL PROGRESS ---------- */
     await job.updateProgress({
       percent: 100,
       platforms: {
@@ -159,14 +138,14 @@ const worker = new Worker(
       },
     });
 
-    /* ---------------- RAW PLATFORM DATA ---------------- */
+    /* ---------- RAW DATA ---------- */
     const rawPlatforms = {
       blinkit: blinkData.slice(0, 10),
       zepto: zeptoData.slice(0, 10),
       jiomart: jiomartData.slice(0, 10),
     };
 
-    /* ---------------- FLATTEN + SCORE ---------------- */
+    /* ---------- MERGE ---------- */
     const allItems = [
       ...rawPlatforms.blinkit.map((i) => ({ ...i, platform: "Blinkit" })),
       ...rawPlatforms.zepto.map((i) => ({ ...i, platform: "Zepto" })),
@@ -177,93 +156,77 @@ const worker = new Worker(
       const name = getDisplayName(item);
       return {
         ...item,
-        normName: normalizeName(name),
         score: similarityScore(product, name),
       };
     });
 
-    /* ---------------- STRICT FILTER ---------------- */
-    const STRICT_THRESHOLD = 0.7;
-    const hasStrictMatch = scoredItems.some(
-      (i) => i.score >= STRICT_THRESHOLD
-    );
-
     const filteredItems = scoredItems
-      .filter((i) =>
-        hasStrictMatch ? i.score >= STRICT_THRESHOLD : i.score > 0
-      )
+      .filter((i) => i.score >= 0.3)
       .sort((a, b) => b.score - a.score);
 
-      /* ---------------- RANKED RESULTS ---------------- */
-const results = filteredItems.map((item, idx) => ({
-  name: getDisplayName(item),
-  quantity: getQuantity(item),
-  platform: item.platform,
-  price: item.price,
-  image: item.image,
-  url: item.url,
-  rank: idx + 1,
-}));
-
-/* ---------------- SIMILAR PRODUCTS ---------------- */
-let similarProducts = [];
-
-if (results.length > 0) {
-  const baseProductName = results[0].name;
-
-  similarProducts = filteredItems
-    .filter(item => {
-      const itemName = getDisplayName(item);
-      if (itemName === baseProductName) return false;
-
-      const score = similarityScore(baseProductName, itemName);
-      return score >= 0.5;
-    })
-    .slice(0, 6)
-    .map(item => ({
+    /* ---------- RESULTS ---------- */
+    const resultsFinal = filteredItems.map((item, idx) => ({
       name: getDisplayName(item),
       quantity: getQuantity(item),
       platform: item.platform,
       price: item.price,
       image: item.image,
       url: item.url,
+      rank: idx + 1,
     }));
-}
 
-    /* ---------------- LOWEST PRICE ---------------- */
+    /* ---------- SIMILAR PRODUCTS ---------- */
+    let similarProducts = [];
+
+    if (resultsFinal.length > 0) {
+      const baseProductName = resultsFinal[0].name;
+
+      similarProducts = filteredItems
+        .filter(item => {
+          const itemName = getDisplayName(item);
+          if (itemName === baseProductName) return false;
+
+          const score = similarityScore(baseProductName, itemName);
+          return score < 0.5 && score > 0;
+        })
+        .slice(0, 6)
+        .map(item => ({
+          name: getDisplayName(item),
+          quantity: getQuantity(item),
+          platform: item.platform,
+          price: item.price,
+          image: item.image,
+          url: item.url,
+        }));
+    }
+
+    /* ---------- LOWEST PRICE ---------- */
     const lowestPriceProduct =
-      results.length === 0
+      resultsFinal.length === 0
         ? null
-        : results.reduce((min, cur) =>
-          getPriceNumber(cur.price) < getPriceNumber(min.price)
-            ? cur
-            : min
-        );
+        : resultsFinal.reduce((min, cur) =>
+            getPriceNumber(cur.price) < getPriceNumber(min.price)
+              ? cur
+              : min
+          );
 
-    /* ---------------- FINAL RESULT ---------------- */
+    /* ---------- FINAL ---------- */
     const finalResult = {
       pincode,
       product,
       timestamp,
       lowestPriceProduct,
-      results,
-      similarProducts,   // 👈 ADD THIS
+      results: resultsFinal,
+      similarProducts,
       platforms: rawPlatforms,
     };
 
-    /* 🔑 JOB-SPECIFIC RESULT */
     const outputFile = path.join(
       RESULTS_DIR,
       `result-${job.id}.json`
     );
 
     fs.writeFileSync(outputFile, JSON.stringify(finalResult, null, 2));
-
-    // /* 🧾 OPTIONAL DEBUG FILE */
-    // fs.writeFileSync(
-    //   path.join(RESULTS_DIR, "final-result.json"),
-    //   JSON.stringify(finalResult, null, 2)
-    // );
 
     return finalResult;
   },
@@ -274,22 +237,13 @@ if (results.length > 0) {
 );
 
 /* --------------------------------------------------
-   📡 WORKER LIFECYCLE LOGS
+   📡 LOGS
 -------------------------------------------------- */
-worker.on("ready", () => {
-  console.log("🟢 Worker ready and waiting for jobs");
-});
+worker.on("ready", () => console.log("🟢 Worker ready"));
+worker.on("completed", (job) => console.log(`✅ Job ${job.id} done`));
+worker.on("failed", (job, err) =>
+  console.error(`❌ Job ${job?.id} failed`, err)
+);
+worker.on("error", (err) => console.error("🔥 Worker error", err));
 
-worker.on("completed", (job) => {
-  console.log(`✅ Job ${job.id} completed`);
-});
-
-worker.on("failed", (job, err) => {
-  console.error(`❌ Job ${job?.id} failed`, err);
-});
-
-worker.on("error", (err) => {
-  console.error("🔥 Worker error", err);
-});
-
-console.log("🚀 Worker booted successfully (search queue)");
+console.log("🚀 Worker running");
